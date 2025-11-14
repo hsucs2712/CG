@@ -2,6 +2,8 @@ from fastAPI_app import app
 import mongoDB
 import uvicorn
 
+
+
 if __name__ == "__main__" :
     try:
         print("connect to MongoDB... ")

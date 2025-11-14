@@ -1,13 +1,16 @@
 # 雲端 FastAPI 服務所需
+packing
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 pydantic[email]==2.5.0
 python-multipart==0.0.6
+paramiko    # SSH 連線到測試主機
 motor==3.3.2  # MongoDB 異步驅動
 pymongo==4.6.1  # MongoDB 驅動
 dnspython==2.4.2  # MongoDB DNS 支援
+rich    # 終端機美化輸出
+
 
 # 測試機客戶端所需
+packing
 requests==2.31.0
-psutil==5.9.6
-GPUtil==1.4.0  # 選用：用於 GPU 資訊
