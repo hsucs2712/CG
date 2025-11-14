@@ -12,6 +12,7 @@ import os
 import platform
 from typing import Dict, List, Tuple
 import pkg_resources
+from packaging import version
 
 # 自動啟動腳本路徑 (Linux)
 AUTO_START_SERVICE = "/etc/systemd/system/cuda-setup.service"
@@ -29,7 +30,7 @@ SCRIPT_PATH = os.path.abspath(__file__)
 
 # Python 套件需求 (格式: '套件名': '版本')
 PYTHON_PACKAGES = {
-    'pip': '', 
+    # pip 會在系統階段自動安裝,不需要在這裡列出
     'requests': '',
     'psutil': '',          # 本地系統資訊
     'rich': '',            # 終端機美化輸出
@@ -176,6 +177,60 @@ class SystemManager:
             return False, e.stderr
         except Exception as e:
             return False, str(e)
+    
+    def install_pip(self) -> bool:
+        """安裝 Python pip (Linux 專用)"""
+        if self.os_type != 'linux':
+            return True
+        
+        print("\n" + "=" * 70)
+        print("檢查並安裝 Python pip")
+        print("=" * 70)
+        
+        # 檢查 pip 是否已安裝
+        success, _ = self._run_cmd([sys.executable, '-m', 'pip', '--version'], use_sudo=False)
+        
+        if success:
+            print("✓ pip 已安裝")
+            return True
+        
+        print("✗ pip 未安裝,開始安裝...")
+        
+        if self.package_manager == 'apt-get':
+            # Ubuntu/Debian
+            print("更新套件列表...")
+            self._run_cmd(['apt-get', 'update'], use_sudo=True)
+            
+            print("安裝 python3-pip...")
+            success, output = self._run_cmd(['apt-get', 'install', '-y', 'python3-pip'], 
+                                           use_sudo=True)
+            if success:
+                print("✓ python3-pip 安裝成功")
+                # 升級 pip 到最新版
+                print("升級 pip 到最新版...")
+                self._run_cmd([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'], 
+                             use_sudo=False)
+                return True
+            else:
+                print(f"✗ python3-pip 安裝失敗: {output}")
+                return False
+        
+        elif self.package_manager == 'dnf':
+            # RHEL/AlmaLinux
+            print("安裝 python3-pip...")
+            success, output = self._run_cmd(['dnf', 'install', '-y', 'python3-pip'], 
+                                           use_sudo=True)
+            if success:
+                print("✓ python3-pip 安裝成功")
+                print("升級 pip 到最新版...")
+                self._run_cmd([sys.executable, '-m', 'pip', 'install', '--upgrade', 'pip'], 
+                             use_sudo=False)
+                return True
+            else:
+                print(f"✗ python3-pip 安裝失敗: {output}")
+                return False
+        
+        return False
     
     def update_system(self) -> bool:
         """更新系統套件列表"""
@@ -731,6 +786,10 @@ def main():
         print("\n" + "█" * 70)
         print("階段 1: 安裝系統基礎工具")
         print("█" * 70)
+        
+        # 1.0 Linux 專用: 先安裝 pip
+        if sys_mgr.os_type == 'linux':
+            sys_mgr.install_pip()
         
         # 1.1 更新系統
         sys_mgr.update_system()
