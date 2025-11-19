@@ -358,19 +358,19 @@ systemctl daemon-reload
         
         # 創建 systemd 服務
         service_content = f"""[Unit]
-Description=CUDA Setup Auto Continue
-After=network.target graphical.target
+        Description=CUDA Setup Auto Continue
+        After=network.target graphical.target
 
-[Service]
-Type=oneshot
-ExecStart={AUTO_START_SCRIPT}
-RemainAfterExit=no
-StandardOutput=journal
-StandardError=journal
+        [Service]
+        Type=oneshot
+        ExecStart={AUTO_START_SCRIPT}
+        RemainAfterExit=no
+        StandardOutput=journal
+        StandardError=journal
 
-[Install]
-WantedBy=multi-user.target
-"""
+        [Install]
+        WantedBy=multi-user.target
+        """
         
         try:
             with open(AUTO_START_SERVICE, 'w') as f:
@@ -778,6 +778,74 @@ def main():
         else:
             print("✗ Chocolatey 安裝失敗,無法繼續")
             return
+        
+    # ========================================
+    # 階段 0: 檢查並安裝  (Linux)
+    # ========================================
+    if not is_auto_continue:
+        print("\n" + "█" * 70)
+        print("階段 1: 檢查現有 NVIDIA 環境")
+        print("█" * 70)
+
+        # 檢查GPU
+        gpu_info = sys_mgr.check.gpu()
+
+        if not gup_info['has gpu']:
+            print('\n 沒有偵測到GPU,程式結束')
+            return
+        
+        driver_status = sys_mgr.check_nvidia_driver()
+        has_driver = driver_status['installed']
+
+        # 檢查CUDA
+        success, _ = run_cmd(['nvcc','--version'], use_sudo=False, check=False)
+        has_cuda = success
+
+        print(f"\n現狀:")
+        print(f"  GPU: {'✓ 已偵測' if gpu_info['has_gpu'] else '✗ 未偵測'}")
+        print(f"  驅動: {'✓ 已安裝' if has_driver else '✗ 未安裝'}")
+        print(f"  CUDA: {'✓ 已安裝' if has_cuda else '✗ 未安裝'}")
+
+        if has_driver and has_cuda:
+            print("\n✓ 驅動和 CUDA 都已安裝,跳到 GPU Burn 安裝")
+            # 直接跳到 GPU Burn
+            sys_mgr.check_and_install_gpu_burn_deps()
+            
+            if gpu_info['compute_capabilities']:
+                cc = gpu_info['compute_capabilities'][0]
+                sys_mgr.install_gpu_burn(compute_capability=cc)
+            
+            print("\n✓ 配置完成!")
+            return
+        
+        # ==========================================
+        # 階段 2: DNF 系統完整安裝流程 (Alma / RHEL)
+        # ==========================================
+        if sys_mgr.package_manager == 'dnf':
+            print("\n" + "█" * 70)
+            print("階段 2: DNF 系統安裝流程")
+            print("█" * 70)
+
+            # 關閉 nouveau
+            print("\n【DNF 步驟 1】關閉 Nouveau 驅動")
+            sys_mgr.disable_nouveau()
+
+            # 安裝驅動和 CUDA (使用 network repo)
+            print("\n【DNF 步驟 2】使用 Network Repository 安裝")
+            success = sys_mgr.install_nvidia_driver_dnf(gpu_info)
+            
+            if not success:
+                print("✗ 安裝失敗")
+                return
+            
+            # 檢查 GPU Burn 依賴
+            print("\n【DNF 步驟 3】檢查 GPU Burn 依賴")
+            sys_mgr.check_and_install_gpu_burn_deps()
+
+            # 設置自動重啟
+            sys_mgr.create_auto_start_linux()
+
+            
     
     # ========================================
     # 階段 1: 系統基礎環境

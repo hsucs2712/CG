@@ -73,7 +73,6 @@ PYTHON_PACKAGES = {
     'psutil': '',          # 本地系統資訊
     'rich': '',            # 終端機美化輸出
     'matplotlib': '',
-    'tkiner':'',
     'packaging': '',       # 版本比較
 }
 
@@ -155,7 +154,7 @@ class SystemManager:
         """偵測系統套件管理器"""
         if self.os_type == 'linux':
             # APT: Ubuntu, Debian, Linux Mint
-            # DNF: Fedora, RHEL 8+, Rocky Linux, AlmaLinux
+            # DNF: Fedora, RHEL 9+, Rocky Linux, AlmaLinux
             managers = ['apt-get', 'dnf']
             for manager in managers:
                 try:
@@ -259,7 +258,7 @@ class SystemManager:
     def check_gpu(self) -> Dict:
         """檢查 NVIDIA GPU"""
         print("\n" + "=" * 70)
-        print("檢查 NVIDIA GPU 硬體")
+        print("【GPU】檢查 NVIDIA GPU 硬體")
         print("=" * 70)
         
         if self.os_type == 'linux':
@@ -346,14 +345,14 @@ class SystemManager:
         
         # Linux 使用 python3
         script_content = f"""#!/bin/bash
-# CUDA 安裝自動繼續腳本
-sleep 10
-cd {work_dir}
-python3 {SCRIPT_PATH}
-rm -f {AUTO_START_SCRIPT}
-rm -f {AUTO_START_SERVICE}
-systemctl daemon-reload
-"""
+        # CUDA 安裝自動繼續腳本
+        sleep 10
+        cd {work_dir}
+        python3 {SCRIPT_PATH}
+        rm -f {AUTO_START_SCRIPT}
+        rm -f {AUTO_START_SERVICE}
+        systemctl daemon-reload
+        """
         
         try:
             with open(AUTO_START_SCRIPT, 'w') as f:
@@ -366,17 +365,17 @@ systemctl daemon-reload
             return False
         
         service_content = f"""[Unit]
-Description=CUDA Setup Auto Continue
-After=network.target graphical.target
+        Description=CUDA Setup Auto Continue
+        After=network.target graphical.target
 
-[Service]
-Type=oneshot
-ExecStart={AUTO_START_SCRIPT}
-RemainAfterExit=no
+        [Service]
+        Type=oneshot
+        ExecStart={AUTO_START_SCRIPT}
+        RemainAfterExit=no
 
-[Install]
-WantedBy=multi-user.target
-"""
+        [Install]
+        WantedBy=multi-user.target
+        """
         
         try:
             with open(AUTO_START_SERVICE, 'w') as f:
@@ -627,50 +626,6 @@ options nouveau modeset=0
             print("✗ CUDA Toolkit 安裝失敗")
             return False
         
-        # 設定CUDA PATH
-        print("設定 CUDA Toolkit PATH...")
-
-        # 偵測 CUDA 版本
-        cuda_base = "/usr/local"
-        cuda_versions = [d for d in os.listdir(cuda_base) if d.startswith("cuda")]
-        cuda_path = None
-
-        if "cuda" in cuda_versions:
-            cuda_path = os.path.join(cuda_base, "cuda")
-        elif len(cuda_versions) > 0:
-            cuda_path = os.path.join(cuda_base, sorted(cuda_versions)[-1])  # 使用最新版本
-
-        if cuda_path is None:
-            print("✗ 找不到 CUDA 安裝路徑，無法設定 PATH")
-        else:
-            env_file = "/etc/profile.d/cuda.sh"
-            export_lines = [
-                f'export PATH={cuda_path}/bin:$PATH',
-                f'export LD_LIBRARY_PATH={cuda_path}/lib64:$LD_LIBRARY_PATH'
-            ]
-
-            print(f"偵測到 CUDA 路徑: {cuda_path}")
-            print("寫入環境變數到 /etc/profile.d/cuda.sh ...")
-
-            # 建立 profile.d 檔案
-            try:
-                with open(env_file, "w") as f:
-                    f.write("# CUDA environment variables\n")
-                    for line in export_lines:
-                        f.write(line + "\n")
-
-                # 讓修改立即生效
-                run_cmd(['bash', '-c', f"source {env_file}"], use_sudo=True)
-
-                print("✓ CUDA PATH 設定完成：")
-                print(f"  PATH += {cuda_path}/bin")
-                print(f"  LD_LIBRARY_PATH += {cuda_path}/lib64")
-
-            except Exception as e:
-                print(f"✗ 寫入 CUDA PATH 失敗: {e}")
-
-        print("✓ NVIDIA / CUDA 安裝流程全部完成")
-        
         # 6. 完整系統更新 (update + upgrade + dist-upgrade)
         print("\n【步驟 6】執行完整系統更新...")
         run_cmd(['apt-get', 'update'], use_sudo=True)
@@ -679,63 +634,366 @@ options nouveau modeset=0
         print("✓ 系統更新完成 (apt update + upgrade + dist-upgrade)")
         
         return True
-    
-    def check_and_install_gpu_burn_deps(self) -> bool:
-        """檢查並安裝 GPU Burn 必要套件"""
+        """DNF: 使用 network repo 安裝 NVIDIA 驅動和 CUDA"""
         print("\n" + "=" * 70)
-        print("檢查 GPU Burn 編譯必要套件")
+        print("DNF: 安裝 NVIDIA 驅動和 CUDA Toolkit")
         print("=" * 70)
         
-        required_tools = ['git', 'make', 'gcc', 'g++']
-        missing_tools = []
+        # 1. 添加 NVIDIA 官方 repository
+        print("\n【步驟 1】添加 NVIDIA Network Repository...")
         
-        # 檢查必要工具
-        for tool in required_tools:
-            success, _ = run_cmd(['which', tool], use_sudo=False, check=False)
-            if not success:
-                missing_tools.append(tool)
-                print(f"✗ {tool}: 未安裝")
-            else:
-                print(f"✓ {tool}: 已安裝")
+        # RHEL/AlmaLinux 8+
+        nvidia_repo = "https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
         
-        # 檢查 CUDA
-        success, _ = run_cmd(['which', 'nvcc'], use_sudo=False, check=False)
+        success, _ = run_cmd(['dnf', 'config-manager', '--add-repo', nvidia_repo], 
+                            use_sudo=True, check=False)
+        if success:
+            print("✓ NVIDIA Repository 添加成功")
+        else:
+            print("⚠ Repository 添加失敗,嘗試手動下載...")
+            run_cmd(['wget', '-O', '/etc/yum.repos.d/cuda-rhel9.repo', nvidia_repo], 
+                   use_sudo=True, check=False)
+        
+        # 2. 清理並更新 cache
+        print("\n【步驟 2】更新套件資料庫...")
+        run_cmd(['dnf', 'clean', 'all'], use_sudo=True)
+        run_cmd(['dnf', 'makecache'], use_sudo=True)
+        
+        # 3. 安裝 NVIDIA 驅動
+        print("\n【步驟 3】安裝 NVIDIA 驅動...")
+        
+        # 根據 GPU 選擇驅動版本
+        driver_package = 'nvidia-driver:latest-dkms'  # 使用 DKMS 版本
+        
+        success, _ = run_cmd(['dnf', 'module', 'install', '-y', driver_package], 
+                            use_sudo=True, check=False)
+        
         if not success:
-            print("✗ nvcc (CUDA): 未安裝或不在 PATH 中")
-        else:
-            print("✓ nvcc (CUDA): 已安裝")
+            # 備用方案: 直接安裝套件
+            print("模組安裝失敗,嘗試直接安裝...")
+            success, _ = run_cmd(['dnf', 'install', '-y', 'nvidia-driver', 'nvidia-settings'], 
+                                use_sudo=True, check=False)
         
-        # 安裝缺少的工具
-        if missing_tools:
-            print(f"\n需要安裝 {len(missing_tools)} 個工具...")
-            
-            if self.package_manager == 'apt-get':
-                # 映射套件名稱
-                packages = []
-                for tool in missing_tools:
-                    if tool in ['gcc', 'g++', 'make']:
-                        packages.append('build-essential')
-                        break
-                packages.extend([t for t in missing_tools if t not in ['gcc', 'g++', 'make']])
-                
-                run_cmd(['apt-get', 'install', '-y'] + list(set(packages)), use_sudo=True)
-                
-            elif self.package_manager == 'dnf':
-                packages = []
-                for tool in missing_tools:
-                    if tool in ['gcc', 'g++', 'make']:
-                        packages.append('gcc-c++')
-                        packages.append('make')
-                    else:
-                        packages.append(tool)
-                
-                run_cmd(['dnf', 'install', '-y'] + list(set(packages)), use_sudo=True)
-            
-            print("✓ 必要套件安裝完成")
+        if success:
+            print("✓ NVIDIA 驅動安裝成功")
         else:
-            print("\n✓ 所有必要套件都已安裝")
+            print("✗ NVIDIA 驅動安裝失敗")
+            return False
+        
+        # 4. 安裝 CUDA Toolkit
+        print("\n【步驟 4】安裝 CUDA Toolkit...")
+        
+        success, _ = run_cmd(['dnf', 'install', '-y', 'cuda-toolkit'], use_sudo=True, check=False)
+        
+        if not success:
+            # 嘗試安裝特定版本
+            print("嘗試安裝 cuda-toolkit-12-x...")
+            success, _ = run_cmd(['dnf', 'install', '-y', 'cuda-toolkit-12-*'], 
+                                use_sudo=True, check=False)
+        
+        if success:
+            print("✓ CUDA Toolkit 安裝成功")
+        else:
+            print("✗ CUDA Toolkit 安裝失敗")
+            return False
+        
+        # 5. 完整系統更新
+        print("\n【步驟 5】執行完整系統更新...")
+        run_cmd(['dnf', 'upgrade', '-y'], use_sudo=True)
+        print("✓ 系統更新完成")
         
         return True
+    
+    def install_nvidia_driver_apt(self, gpu_info: Dict) -> bool:
+        """APT: 使用 network repo 安裝 NVIDIA 驅動和 CUDA"""
+        print("\n" + "=" * 70)
+        print("APT: 安裝 NVIDIA 驅動和 CUDA Toolkit")
+        print("=" * 70)
+        
+        # 1. 添加 NVIDIA 官方 repository
+        print("\n【步驟 1】添加 NVIDIA Network Repository...")
+        
+        # 安裝必要工具
+        run_cmd(['apt-get', 'install', '-y', 'software-properties-common', 'wget'], use_sudo=True)
+        
+        # 添加 NVIDIA CUDA Repository
+        cuda_repo_pin = "/etc/apt/preferences.d/cuda-repository-pin-600"
+        cuda_keyring = "cuda-keyring_1.1-1_all.deb"
+        
+        print("下載 CUDA Repository 設定...")
+        run_cmd(['wget', 'https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb'], 
+               check=False)
+        
+        if os.path.exists(cuda_keyring):
+            run_cmd(['dpkg', '-i', cuda_keyring], use_sudo=True)
+            print("✓ CUDA Repository 添加成功")
+        else:
+            print("⚠ Repository keyring 下載失敗,嘗試備用方案...")
+            # 添加 Graphics Drivers PPA
+            run_cmd(['add-apt-repository', '-y', 'ppa:graphics-drivers/ppa'], use_sudo=True)
+        
+        # 2. 更新套件資料庫
+        print("\n【步驟 2】更新套件資料庫...")
+        run_cmd(['apt-get', 'update'], use_sudo=True)
+        
+        # 3. 移除舊驅動
+        print("\n【步驟 3】移除舊的 NVIDIA 驅動...")
+        self.remove_existing_nvidia_driver()
+        
+        # 4. 根據 GPU 安裝對應版本的驅動
+        print("\n【步驟 4】安裝 NVIDIA 驅動...")
+        
+        # 查詢推薦的驅動版本
+        success, output = run_cmd(['ubuntu-drivers', 'devices'], use_sudo=True, check=False)
+        
+        if success and 'recommended' in output:
+            print("使用 ubuntu-drivers 自動安裝推薦驅動...")
+            success, _ = run_cmd(['ubuntu-drivers', 'autoinstall'], use_sudo=True, check=False)
+        else:
+            # 手動安裝最新版本
+            print("手動安裝最新驅動版本...")
+            drivers = ['nvidia-driver-550', 'nvidia-driver-545', 'nvidia-driver-535']
+            for driver in drivers:
+                print(f"嘗試安裝 {driver}...")
+                success, _ = run_cmd(['apt-get', 'install', '-y', driver], use_sudo=True, check=False)
+                if success:
+                    break
+        
+        if success:
+            print("✓ NVIDIA 驅動安裝成功")
+        else:
+            print("✗ NVIDIA 驅動安裝失敗")
+            return False
+        
+        # 5. 安裝 CUDA Toolkit
+        print("\n【步驟 5】安裝 CUDA Toolkit...")
+        
+        cuda_packages = ['cuda-toolkit-12-6', 'cuda-toolkit-12-5', 'cuda-toolkit']
+        
+        for pkg in cuda_packages:
+            print(f"嘗試安裝 {pkg}...")
+            success, _ = run_cmd(['apt-get', 'install', '-y', pkg], use_sudo=True, check=False)
+            if success:
+                print(f"✓ {pkg} 安裝成功")
+                break
+        
+        if not success:
+            print("✗ CUDA Toolkit 安裝失敗")
+            return False
+        
+        # 6. 完整系統更新
+        print("\n【步驟 6】執行完整系統更新...")
+        run_cmd(['apt-get', 'update'], use_sudo=True)
+        run_cmd(['apt-get', 'upgrade', '-y'], use_sudo=True)
+        run_cmd(['apt-get', 'dist-upgrade', '-y'], use_sudo=True)
+        print("✓ 系統更新完成")
+        
+        return True
+    
+    def install_chocolatey(self) -> bool:
+        """安裝 Chocolatey 套件管理器"""
+        print("\n" + "=" * 70)
+        print("安裝 Chocolatey 套件管理器")
+        print("=" * 70)
+        
+        try:
+            cmd = (
+                "Set-ExecutionPolicy Bypass -Scope Process -Force; "
+                "[System.Net.ServicePointManager]::SecurityProtocol = "
+                "[System.Net.ServicePointManager]::SecurityProtocol -bor 3072; "
+                "iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))"
+            )
+            
+            print("執行 Chocolatey 安裝腳本...")
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            print("✓ Chocolatey 安裝成功")
+            print("\n⚠ 重要: 需要重新啟動 PowerShell/命令提示字元才能使用 choco")
+            
+            # 設置 Windows 自動重啟
+            self.create_auto_start_windows()
+            
+            print("\n系統將在 10 秒後自動重啟...")
+            import time
+            for i in range(10, 0, -1):
+                print(f"\r重啟倒數: {i} 秒...", end='', flush=True)
+                time.sleep(1)
+            print("\n")
+            
+            subprocess.run(['shutdown', '/r', '/t', '0'], check=False)
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"✗ Chocolatey 安裝失敗: {e.stderr}")
+            return False
+        except Exception as e:
+            print(f"✗ 安裝過程出錯: {e}")
+            return False
+    
+    def create_auto_start_windows(self) -> bool:
+        """創建 Windows 自動啟動腳本"""
+        print("\n設置 Windows 自動啟動...")
+        
+        work_dir = os.path.dirname(SCRIPT_PATH)
+        
+        # 創建標記文件
+        try:
+            with open(WINDOWS_FLAG_FILE, 'w') as f:
+                f.write('restart')
+            print(f"✓ 創建標記文件: {WINDOWS_FLAG_FILE}")
+        except Exception as e:
+            print(f"✗ 創建標記文件失敗: {e}")
+            return False
+        
+        # 創建啟動批次檔
+        bat_content = f"""@echo off
+            timeout /t 10 /nobreak
+            cd /d "{work_dir}"
+            "{sys.executable}" "{SCRIPT_PATH}"
+            del "%~f0"
+            """
+        
+        try:
+            startup_dir = os.path.dirname(WINDOWS_STARTUP_SCRIPT)
+            os.makedirs(startup_dir, exist_ok=True)
+            
+            with open(WINDOWS_STARTUP_SCRIPT, 'w') as f:
+                f.write(bat_content)
+            print(f"✓ 創建啟動腳本: {WINDOWS_STARTUP_SCRIPT}")
+            return True
+        except Exception as e:
+            print(f"✗ 創建啟動腳本失敗: {e}")
+            return False
+    
+    def remove_auto_start_windows(self) -> bool:
+        """移除 Windows 自動啟動"""
+        print("\n移除 Windows 自動啟動...")
+        
+        try:
+            if os.path.exists(WINDOWS_STARTUP_SCRIPT):
+                os.remove(WINDOWS_STARTUP_SCRIPT)
+                print(f"✓ 刪除啟動腳本: {WINDOWS_STARTUP_SCRIPT}")
+            
+            if os.path.exists(WINDOWS_FLAG_FILE):
+                os.remove(WINDOWS_FLAG_FILE)
+                print(f"✓ 刪除標記文件: {WINDOWS_FLAG_FILE}")
+            
+            print("✓ 自動啟動功能已移除")
+            return True
+        except Exception as e:
+            print(f"⚠ 移除文件時出錯: {e}")
+            return False
+        
+    def install_nvidia_driver_windows(self) -> bool:
+        """Windows: 使用 Chocolatey 安裝 NVIDIA 顯示卡驅動"""
+        print("\n" + "=" * 70)
+        print("Windows: 安裝 NVIDIA 顯示卡驅動")
+        print("=" * 70)
+
+        if not self.package_manager:
+            print("✗ 無法安裝：Chocolatey 未安裝")
+            return False
+
+        print("\n使用 Chocolatey 安裝 NVIDIA 顯示卡驅動...")
+        success, output = run_cmd(['choco', 'install', 'nvidia-display-driver', '-y'], check=False)
+
+        if success:
+            print("✓ NVIDIA 顯示卡驅動安裝成功")
+            
+            # 驗證 GPU 是否啟動
+            gpu_info = self.check_gpu()
+            if gpu_info.get('has_gpu', False):
+                print("✓ 驅動啟用成功，已偵測到 GPU：")
+                print(f"  型號：{gpu_info.get('gpu_name')}")
+            else:
+                print("✗ 驅動安裝後仍未偵測到 GPU，可能需要重啟")
+            
+            return True
+
+        else:
+            print("✗ NVIDIA Driver 安裝失敗")
+            print(f"錯誤：{output}")
+
+            print("\n手動下載：")
+            print("https://www.nvidia.com/Download/index.aspx")
+            return False
+    
+    def install_nvidia_cuda_windows(self) -> bool:
+        """Windows: 使用 Chocolatey 安裝 CUDA Toolkit"""
+        print("\n" + "=" * 70)
+        print("Windows: 安裝 CUDA Toolkit")
+        print("=" * 70)
+        
+        if not self.package_manager:
+            print("✗ Chocolatey 未安裝,無法繼續")
+            return False
+        
+        print("\n使用 Chocolatey 安裝 CUDA...")
+        success, output = run_cmd(['choco', 'install', 'cuda', '-y'], check=False)
+        
+        if success:
+            print("✓ CUDA Toolkit 安裝成功")
+            
+            # 驗證安裝
+            success, output = run_cmd(['nvcc', '--version'], use_sudo=False, check=False)
+            if success:
+                print("\n✓ CUDA 驗證成功:")
+                for line in output.split('\n'):
+                    if line.strip():
+                        print(f"  {line}")
+            return True
+        else:
+            print(f"✗ CUDA 安裝失敗")
+            print(f"錯誤: {output}")
+            
+            print("\n建議手動安裝:")
+            print("1. 從 NVIDIA 官網下載: https://developer.nvidia.com/cuda-downloads")
+            print("2. 選擇 Windows 版本並安裝")
+            return False
+    
+    def install_cuda(self) -> bool:
+        """安裝 CUDA Toolkit"""
+        print("\n" + "=" * 70)
+        print("【GPU 步驟 2】安裝 CUDA Toolkit")
+        print("=" * 70)
+        
+        self.remove_auto_start_linux()
+        
+        if self.package_manager == 'apt-get':
+            run_cmd(['apt-get', 'update'], use_sudo=True)
+            
+            cuda_pkgs = ['cuda-toolkit', 'nvidia-cuda-toolkit']
+            for pkg in cuda_pkgs:
+                print(f"\n安裝 {pkg}...")
+                success, _ = run_cmd(['apt-get', 'install', '-y', pkg], use_sudo=True, check=False)
+                if success:
+                    print(f"✓ {pkg} 安裝成功 (無需重啟)")
+                    run_cmd(['apt-get', 'update'], use_sudo=True)
+                    
+                    success, output = run_cmd(['nvcc', '--version'], use_sudo=False, check=False)
+                    if success:
+                        print("✓ CUDA Toolkit 驗證成功:")
+                        for line in output.split('\n'):
+                            if line.strip():
+                                print(f"  {line}")
+                    return True
+            
+            return False
+        
+        elif self.package_manager == 'dnf':
+            run_cmd(['dnf', 'install', '-y', 'cuda'], use_sudo=True, check=False)
+            return True
+        
+        elif self.package_manager == 'choco':
+            success, _ = run_cmd(['choco', 'install', 'cuda', '-y'])
+            return success
+        
+        return False
     
     def install_gpu_burn(self, compute_capability: str = None) -> bool:
         """下載並編譯 GPU Burn"""
@@ -893,6 +1151,8 @@ class PythonPackageManager:
 
 
 def main():
+    """主程式"""
+    
     print("\n" + "=" * 70)
     print(" " * 15 + "自動化環境配置工具")
     print("=" * 70)
@@ -909,15 +1169,19 @@ def main():
     # ==========================================
     if not is_auto_continue:
         print("\n" + "█" * 70)
-        print("階段 1: 檢查現有 NVIDIA 環境")
+        print("檢查現有 NVIDIA 環境")
         print("█" * 70)
         
         # 檢查 GPU
         gpu_info = sys_mgr.check_gpu()
         
         if not gpu_info['has_gpu']:
-            print("\n✗ 沒有偵測到 NVIDIA GPU,程式結束")
-            # return
+            print("\n✗ 沒有偵測到 NVIDIA GPU")
+            if sys_mgr.os_type == 'windows':
+                print("   Windows 系統將繼續安裝系統工具和 Python 套件")
+            else:
+                print("   程式結束")
+                return
         
         # 檢查驅動
         driver_status = sys_mgr.check_nvidia_driver()
@@ -932,9 +1196,8 @@ def main():
         print(f"  驅動: {'✓ 已安裝' if has_driver else '✗ 未安裝'}")
         print(f"  CUDA: {'✓ 已安裝' if has_cuda else '✗ 未安裝'}")
         
-        if has_driver and has_cuda:
-            print("\n✓ 驅動和 CUDA 都已安裝,跳到 GPU Burn 安裝")
-            # 直接跳到 GPU Burn
+        if has_driver and has_cuda and sys_mgr.os_type == 'linux':
+            print("\n✓ Linux 驅動和 CUDA 都已安裝,跳到 GPU Burn 安裝")
             sys_mgr.check_and_install_gpu_burn_deps()
             
             if gpu_info['compute_capabilities']:
@@ -945,19 +1208,34 @@ def main():
             return
         
         # ==========================================
+        # 階段 2: Windows Chocolatey 安裝
+        # ==========================================
+        if sys_mgr.os_type == 'windows' and not sys_mgr.package_manager:
+            print("\n" + "█" * 70)
+            print("階段 0: 安裝 Chocolatey 套件管理器")
+            print("█" * 70)
+            
+            if sys_mgr.install_chocolatey():
+                # 安裝完成會自動重啟
+                return
+            else:
+                print("✗ Chocolatey 安裝失敗,無法繼續")
+                return
+        
+        # ==========================================
         # 階段 2: DNF 系統完整安裝流程
         # ==========================================
         if sys_mgr.package_manager == 'dnf':
             print("\n" + "█" * 70)
-            print("階段 2: DNF 系統安裝流程")
+            print("DNF 系統安裝流程")
             print("█" * 70)
             
             # 2.1 關閉 nouveau
-            print("\n【DNF 步驟 1】關閉 Nouveau 驅動")
+            print("\n【DNF】關閉 Nouveau 驅動")
             sys_mgr.disable_nouveau()
             
             # 2.2 安裝驅動和 CUDA (使用 network repo)
-            print("\n【DNF 步驟 2】使用 Network Repository 安裝")
+            print("\n【DNF】使用 Network Repository 安裝")
             success = sys_mgr.install_nvidia_driver_dnf(gpu_info)
             
             if not success:
@@ -965,7 +1243,7 @@ def main():
                 return
             
             # 2.3 檢查 GPU Burn 依賴
-            print("\n【DNF 步驟 3】檢查 GPU Burn 依賴")
+            print("\n【DNF】檢查 GPU Burn 依賴")
             sys_mgr.check_and_install_gpu_burn_deps()
             
             # 2.4 設置自動重啟
@@ -987,19 +1265,19 @@ def main():
             return
         
         # ==========================================
-        # 階段 3: APT 系統完整安裝流程
+        # 階段 2: APT 系統完整安裝流程
         # ==========================================
         elif sys_mgr.package_manager == 'apt-get':
             print("\n" + "█" * 70)
-            print("階段 3: APT 系統安裝流程")
+            print("APT 系統安裝流程")
             print("█" * 70)
             
             # 3.1 關閉 nouveau
-            print("\n【APT 步驟 1】嘗試關閉 Nouveau 驅動")
+            print("\n【APT】嘗試關閉 Nouveau 驅動")
             sys_mgr.disable_nouveau()
             
             # 3.2 安裝驅動和 CUDA (使用 network repo)
-            print("\n【APT 步驟 2】使用 Network Repository 安裝")
+            print("\n【APT】使用 Network Repository 安裝")
             success = sys_mgr.install_nvidia_driver_apt(gpu_info)
             
             if not success:
@@ -1007,7 +1285,7 @@ def main():
                 return
             
             # 3.3 檢查 GPU Burn 依賴
-            print("\n【APT 步驟 3】檢查 GPU Burn 依賴")
+            print("\n【APT】檢查 GPU Burn 依賴")
             sys_mgr.check_and_install_gpu_burn_deps()
             
             # 3.4 設置自動重啟
@@ -1027,51 +1305,92 @@ def main():
             
             run_cmd(['reboot'], use_sudo=True)
             return
-    
+        
     # ==========================================
-    # 階段 4: 重啟後 - 安裝 Python 套件和 GPU Burn
+    # 階段 5: 重啟後 - 安裝 Python 套件和 GPU Burn
     # ==========================================
     if is_auto_continue:
-        print("\n" + "█" * 70)
-        print("階段 4: 重啟後繼續 - Python 套件")
-        print("█" * 70)
+        if sys_mgr.os_type == 'linux':
+            # Linux 重啟後流程
+            print("\n" + "█" * 70)
+            print("重啟後繼續 - Python 套件")
+            print("█" * 70)
+            
+            sys_mgr.remove_auto_start_linux()
+            
+            gpu_info = sys_mgr.check_gpu()
+            
+            driver_status = sys_mgr.check_nvidia_driver()
+            if not driver_status['installed']:
+                print("重啟後仍未偵測到驅動,安裝可能失敗")
+                return
+            
+            # 驗證 CUDA
+            success, output = run_cmd(['nvcc', '--version'], use_sudo=False, check=False)
+            if success:
+                print("\nCUDA Toolkit 驗證成功:")
+                for line in output.split('\n'):
+                    if line.strip():
+                        print(f"  {line}")
+            else:
+                print("⚠ CUDA 命令不可用")
+            
+            # 安裝 Python 套件
+            py_mgr = PythonPackageManager()
+            py_mgr.install_packages(PYTHON_PACKAGES)
+            
+            # 安裝 GPU Burn
+            print("\n" + "█" * 70)
+            print("安裝 GPU Burn")
+            print("█" * 70)
+            
+            if gpu_info['has_gpu'] and gpu_info['compute_capabilities']:
+                cc = gpu_info['compute_capabilities'][0]
+                sys_mgr.install_gpu_burn(compute_capability=cc)
+            elif gpu_info['has_gpu']:
+                sys_mgr.install_gpu_burn()
         
-        # 移除自動啟動
-        sys_mgr.remove_auto_start_linux()
+        elif sys_mgr.os_type == 'windows':
+            # Windows 重啟後流程
+            print("\n" + "█" * 70)
+            print("Windows 重啟後繼續")
+            print("█" * 70)
+            
+            sys_mgr.remove_auto_start_windows()
+            
+            # 重新偵測套件管理器
+            sys_mgr.package_manager = sys_mgr._detect_package_manager()
+            
+            if sys_mgr.package_manager:
+                print(f"✓ Chocolatey 已就緒: {sys_mgr.package_manager}")
+                
+                # 繼續安裝系統工具和套件
+                print("\n安裝系統工具")
+                sys_mgr.install_system_tools(WINDOWS_TOOLS)
+                
+                print("\n安裝 Python 套件")
+                py_mgr = PythonPackageManager()
+                py_mgr.install_packages(PYTHON_PACKAGES)
+
+                gpu_info = sys_mgr.check_gpu()
+                if gpu_info['has_gpu']:
+
+                    # Step A：先安裝 Driver（如果沒有）
+                    success, _ = run_cmd(['nvidia-smi'], check=False)
+                    if not success:
+                        print("\n安裝 NVIDIA 顯示卡驅動 (Driver)")
+                        sys_mgr.install_nvidia_driver_windows()
+
+                    # Step B：再檢查 CUDA
+                    success, _ = run_cmd(['nvcc', '--version'], check=False)
+                    if not success:
+                        print("\n安裝 CUDA Toolkit")
+                        sys_mgr.install_nvidia_cuda_windows()
         
-        # 重新檢查 GPU
-        gpu_info = sys_mgr.check_gpu()
-        
-        # 驗證驅動
-        driver_status = sys_mgr.check_nvidia_driver()
-        if not driver_status['installed']:
-            print("✗ 重啟後仍未偵測到驅動,安裝可能失敗")
-            return
-        
-        # 驗證 CUDA
-        success, output = run_cmd(['nvcc', '--version'], use_sudo=False, check=False)
-        if success:
-            print("\n✓ CUDA Toolkit 驗證成功:")
-            for line in output.split('\n'):
-                if line.strip():
-                    print(f"  {line}")
-        else:
-            print("⚠ CUDA 命令不可用,可能需要設置環境變數")
-        
-        # 安裝 Python 套件
-        py_mgr = PythonPackageManager()
-        py_mgr.install_packages(PYTHON_PACKAGES)
-        
-        # 安裝 GPU Burn
-        print("\n" + "█" * 70)
-        print("階段 5: 安裝 GPU Burn")
-        print("█" * 70)
-        
-        if gpu_info['has_gpu'] and gpu_info['compute_capabilities']:
-            cc = gpu_info['compute_capabilities'][0]
-            sys_mgr.install_gpu_burn(compute_capability=cc)
-        elif gpu_info['has_gpu']:
-            sys_mgr.install_gpu_burn()
+                print("\n✓ Windows 配置完成!")
+            else:
+                print("✗ Chocolatey 仍未就緒")
+                return
     
     # ==========================================
     # 完成報告
