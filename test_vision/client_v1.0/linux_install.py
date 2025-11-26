@@ -93,25 +93,23 @@ class LinuxInstaller:
         return False
     
     def disable_nouveau(self) -> bool:
-        """nouveauドライバを無効化してinitramfsを更新"""
+        """Nouveauドライバを無効化"""
         print("\n" + "=" * 70)
         print("Nouveauオープンソースドライバを無効化")
         print("=" * 70)
         
         blacklist_file = "/etc/modprobe.d/blacklist-nouveau.conf"
-        blacklist_content = """# Blacklist nouveau driver
-blacklist nouveau
-options nouveau modeset=0
+        blacklist_content = """options nouveau modeset=0
 """
         
         try:
-            if os.path.exists(blacklist_file):
-                print(f"✓ {blacklist_file} が存在します")
-            else:
-                print(f"{blacklist_file}を作成...")
-                with open(blacklist_file, 'w') as f:
-                    f.write(blacklist_content)
-                print(f"✓ blacklist設定を作成しました")
+            print(f"\nブラックリストファイルを作成/更新: {blacklist_file}")
+            
+            # ファイルが存在しない場合のみ作成、存在する場合は上書き
+            with open(blacklist_file, 'w') as f:
+                f.write(blacklist_content)
+            
+            print("✓ ブラックリスト設定を作成しました")
             
             print("\ninitramfsを更新...")
             
@@ -136,118 +134,202 @@ options nouveau modeset=0
             print(f"✗ nouveauの無効化失敗: {e}")
             return False
     
-    def remove_existing_nvidia_driver(self) -> bool:
-        """既存のNVIDIAドライバを削除"""
-        print("\n既存のNVIDIAドライバをチェックして削除...")
-        
-        if self.package_manager == 'apt-get':
-            success, output = run_cmd(['dpkg', '-l'], use_sudo=False, check=False)
-            if success and 'nvidia' in output.lower():
-                print("既存のNVIDIAパッケージを検出、削除準備...")
-                run_cmd(['apt-get', 'remove', '--purge', '-y', 'nvidia-*'], use_sudo=True, check=False)
-                run_cmd(['apt-get', 'autoremove', '-y'], use_sudo=True, check=False)
-                print("✓ 旧ドライバを削除しました")
-            else:
-                print("✓ 既存のNVIDIAドライバはありません")
-                
-        elif self.package_manager == 'dnf':
-            success, output = run_cmd(['dnf', 'list', 'installed'], use_sudo=False, check=False)
-            if success and 'nvidia' in output.lower():
-                print("既存のNVIDIAパッケージを検出、削除準備...")
-                run_cmd(['dnf', 'remove', '-y', 'nvidia-*'], use_sudo=True, check=False)
-                print("✓ 旧ドライバを削除しました")
-            else:
-                print("✓ 既存のNVIDIAドライバはありません")
-        
-        return True
-    
-    def install_nvidia_driver_apt(self, gpu_info: Dict) -> bool:
-        """APT: network repoを使用してNVIDIAドライバとCUDAをインストール"""
+    def install_build_essential(self) -> bool:
+        """開発環境を準備"""
         print("\n" + "=" * 70)
-        print("APT: NVIDIAドライバとCUDA Toolkitをインストール")
+        print("開発環境の準備")
         print("=" * 70)
         
-        # 1. NVIDIA公式repositoryを追加
-        print("\n【ステップ 1】NVIDIA Network Repositoryを追加...")
+        # GCCのバージョンを確認
+        success, output = run_cmd(['gcc', '--version'], use_sudo=False, check=False, silent=True)
+        if success:
+            first_line = output.strip().split('\n')[0]
+            print(f"✓ GCC already installed: {first_line}")
+            return True
         
-        run_cmd(['apt-get', 'install', '-y', 'software-properties-common', 'wget'], use_sudo=True)
+        print("\nbuild-essentialをインストール...")
+        success, _ = run_cmd(['apt-get', 'install', '-y', 'build-essential'], use_sudo=True)
+        
+        if success:
+            print("✓ build-essentialのインストール完了")
+            return True
+        else:
+            print("✗ build-essentialのインストール失敗")
+            return False
+    
+    def install_linux_headers(self) -> bool:
+        """Linuxカーネルヘッダをインストール"""
+        print("\n" + "=" * 70)
+        print("Linuxカーネルヘッダをインストール")
+        print("=" * 70)
+        
+        success, _ = run_cmd(['apt-get', 'install', '-y', f'linux-headers-$(uname -r)'], 
+                            use_sudo=True, check=False)
+        
+        if success:
+            print("✓ Linuxカーネルヘッダのインストール完了")
+            return True
+        else:
+            print("⚠ Linuxカーネルヘッダのインストール失敗")
+            return False
+    
+    def install_cuda_toolkit_apt(self) -> bool:
+        """APT (Ubuntu): Network Repoからcuda-toolkitをインストール"""
+        print("\n" + "=" * 70)
+        print("【APT】CUDA Toolkitをインストール (Network Repo)")
+        print("=" * 70)
+        
+        print("\n【ステップ 1-1】CUDA Repositoryキーをダウンロード...")
         
         cuda_keyring = "cuda-keyring_1.1-1_all.deb"
         
-        print("CUDA Repository設定をダウンロード...")
-        run_cmd(['wget', 'https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb'], 
-               check=False)
+        success, _ = run_cmd(['wget', 'https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb'], 
+                            check=False)
         
-        if os.path.exists(cuda_keyring):
-            run_cmd(['dpkg', '-i', cuda_keyring], use_sudo=True)
-            print("✓ CUDA Repositoryを追加しました")
-        else:
-            print("⚠ Repository keyringのダウンロード失敗、代替案を試します...")
-            run_cmd(['add-apt-repository', '-y', 'ppa:graphics-drivers/ppa'], use_sudo=True)
+        if not os.path.exists(cuda_keyring):
+            print("✗ Repository keyringのダウンロード失敗")
+            return False
         
-        # 2. パッケージデータベースを更新
-        print("\n【ステップ 2】パッケージデータベースを更新...")
+        print("✓ キーリングダウンロード成功")
+        
+        print("\n【ステップ 1-2】キーリングをインストール...")
+        success, _ = run_cmd(['dpkg', '-i', cuda_keyring], use_sudo=True)
+        
+        if not success:
+            print("✗ キーリングのインストール失敗")
+            return False
+        
+        print("✓ キーリングのインストール完了")
+        
+        print("\n【ステップ 1-3】パッケージリストを更新...")
         run_cmd(['apt-get', 'update'], use_sudo=True)
+        print("✓ パッケージリスト更新完了")
         
-        # 3. 旧ドライバを削除
-        print("\n【ステップ 3】既存のNVIDIAドライバを削除...")
-        self.remove_existing_nvidia_driver()
+        print("\n【ステップ 1-4】CUDA Toolkitをインストール...")
+        success, _ = run_cmd(['apt-get', 'install', '-y', 'cuda-toolkit'], use_sudo=True, check=False)
         
-        # 4. ドライバをインストール
-        print("\n【ステップ 4】NVIDIAドライバをインストール...")
-        
-        success, output = run_cmd(['ubuntu-drivers', 'devices'], use_sudo=True, check=False)
-        
-        if success and 'recommended' in output:
-            print("ubuntu-driversで推奨ドライバを自動インストール...")
-            success, _ = run_cmd(['ubuntu-drivers', 'autoinstall'], use_sudo=True, check=False)
+        if success:
+            print("✓ CUDA Toolkitのインストール成功")
+            return True
         else:
-            print("最新ドライババージョンを手動インストール...")
-            drivers = ['nvidia-driver-550', 'nvidia-driver-545', 'nvidia-driver-535']
-            for driver in drivers:
-                print(f"{driver}のインストールを試行...")
-                success, _ = run_cmd(['apt-get', 'install', '-y', driver], use_sudo=True, check=False)
-                if success:
-                    break
+            print("✗ CUDA Toolkitのインストール失敗")
+            return False
+    
+    def install_nvidia_driver_apt(self, distro: str = 'ubuntu2404', arch: str = 'x86_64') -> bool:
+        """APT (Ubuntu): Network RepoからGPU Driverをインストール"""
+        print("\n" + "=" * 70)
+        print("【APT】NVIDIAドライバをインストール (Network Repo)")
+        print("=" * 70)
+        
+        print(f"\n【ステップ 2-1】システム情報を確認")
+        print(f"  Distribution: {distro}")
+        print(f"  Architecture: {arch}")
+        
+        print("\n【ステップ 2-2】CUDA Repositoryキーをダウンロード...")
+        
+        cuda_keyring = "cuda-keyring_1.1-1_all.deb"
+        keyring_url = f"https://developer.download.nvidia.com/compute/cuda/repos/{distro}/{arch}/cuda-keyring_1.1-1_all.deb"
+        
+        success, _ = run_cmd(['wget', keyring_url], check=False)
+        
+        if not os.path.exists(cuda_keyring):
+            print("✗ Repository keyringのダウンロード失敗")
+            return False
+        
+        print("✓ キーリングダウンロード成功")
+        
+        print("\n【ステップ 2-3】キーリングをインストール...")
+        success, _ = run_cmd(['dpkg', '-i', cuda_keyring], use_sudo=True)
+        
+        if not success:
+            print("✗ キーリングのインストール失敗")
+            return False
+        
+        print("✓ キーリングのインストール完了")
+        
+        print("\n【ステップ 2-4】パッケージリストを更新...")
+        run_cmd(['apt-get', 'update'], use_sudo=True)
+        print("✓ パッケージリスト更新完了")
+        
+        print("\n【ステップ 2-5】NVIDIAドライバをインストール...")
+        success, _ = run_cmd(['apt-get', 'install', '-y', 'cuda-drivers'], use_sudo=True, check=False)
         
         if success:
             print("✓ NVIDIAドライバのインストール成功")
+            return True
         else:
             print("✗ NVIDIAドライバのインストール失敗")
             return False
+    
+    def verify_cuda_installation(self) -> bool:
+        """CUDA動作確認"""
+        print("\n" + "=" * 70)
+        print("CUDA動作確認")
+        print("=" * 70)
         
-        # 5. CUDA Toolkitをインストール
-        print("\n【ステップ 5】CUDA Toolkitをインストール...")
+        success, output = run_cmd(['nvidia-smi'], use_sudo=False, check=False)
         
-        cuda_packages = ['cuda-toolkit-12-6', 'cuda-toolkit-12-5', 'cuda-toolkit']
+        if success:
+            print("\n✓ nvidia-smi実行成功:")
+            for line in output.split('\n')[:20]:  # 最初の20行だけ表示
+                if line.strip():
+                    print(f"  {line}")
+            return True
+        else:
+            print("✗ nvidia-smiの実行失敗")
+            return False
+    
+    def verify_cuda_path(self) -> str:
+        """CUDA関連bin,libの存在を確認してパスを取得"""
+        print("\n" + "=" * 70)
+        print("CUDA関連ファイルの確認")
+        print("=" * 70)
         
-        for pkg in cuda_packages:
-            print(f"{pkg}のインストールを試行...")
-            success, _ = run_cmd(['apt-get', 'install', '-y', pkg], use_sudo=True, check=False)
-            if success:
-                print(f"✓ {pkg} インストール成功")
+        cuda_paths = ['/usr/local/cuda-12.6', '/usr/local/cuda-12', '/usr/local/cuda', '/usr']
+        detected_path = None
+        
+        print("\nCUDAパスをスキャン...")
+        for path in cuda_paths:
+            nvcc_path = os.path.join(path, 'bin', 'nvcc')
+            lib_path = os.path.join(path, 'lib64')
+            
+            if os.path.exists(nvcc_path):
+                print(f"✓ 検出: {path}")
+                print(f"    - nvcc: {nvcc_path}")
+                if os.path.exists(lib_path):
+                    print(f"    - lib64: {lib_path}")
+                detected_path = path
                 break
         
-        if not success:
-            print("✗ CUDA Toolkitのインストール失敗")
-            return False
+        if detected_path:
+            print(f"\n✓ CUDAパスを確定: {detected_path}")
+            return detected_path
+        else:
+            print("\n✗ CUDAインストールディレクトリが見つかりません")
+            return None
+    
+    def setup_cuda_environment(self, cuda_path: str) -> bool:
+        """環境変数を設定"""
+        print("\n" + "=" * 70)
+        print("環境変数設定")
+        print("=" * 70)
         
-        # 6. 完全なシステム更新
-        print("\n【ステップ 6】完全なシステム更新を実行...")
-        run_cmd(['apt-get', 'update'], use_sudo=True)
-        run_cmd(['apt-get', 'upgrade', '-y'], use_sudo=True)
-        run_cmd(['apt-get', 'dist-upgrade', '-y'], use_sudo=True)
-        print("✓ システム更新完了 (apt update + upgrade + dist-upgrade)")
+        # 環境変数を現在のプロセスに設定
+        os.environ['PATH'] = f"{os.path.join(cuda_path, 'bin')}:{os.environ.get('PATH', '')}"
+        os.environ['LD_LIBRARY_PATH'] = f"{os.path.join(cuda_path, 'lib64')}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+        
+        print(f"\n✓ 環境変数を設定:")
+        print(f"  export PATH={os.path.join(cuda_path, 'bin')}:${{PATH}}")
+        print(f"  export LD_LIBRARY_PATH={os.path.join(cuda_path, 'lib64')}:${{LD_LIBRARY_PATH}}")
         
         return True
     
-    def install_nvidia_driver_dnf(self, gpu_info: Dict) -> bool:
-        """DNF: network repoを使用してNVIDIAドライバとCUDAをインストール"""
+    def install_cuda_toolkit_dnf(self) -> bool:
+        """DNF (RHEL/CentOS): Network Repoからcuda-toolkitをインストール"""
         print("\n" + "=" * 70)
-        print("DNF: NVIDIAドライバとCUDA Toolkitをインストール")
+        print("【DNF】CUDA Toolkitをインストール (Network Repo)")
         print("=" * 70)
         
-        # 1. NVIDIA公式repositoryを追加
         print("\n【ステップ 1】NVIDIA Network Repositoryを追加...")
         
         nvidia_repo = "https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
@@ -257,60 +339,172 @@ options nouveau modeset=0
         if success:
             print("✓ NVIDIA Repositoryを追加しました")
         else:
-            print("⚠ Repositoryの追加失敗、手動ダウンロードを試行...")
+            print("⚠ Repository追加失敗、手動ダウンロードを試行...")
             run_cmd(['wget', '-O', '/etc/yum.repos.d/cuda-rhel9.repo', nvidia_repo], 
                    use_sudo=True, check=False)
         
-        # 2. キャッシュをクリアして更新
-        print("\n【ステップ 2】パッケージデータベースを更新...")
+        print("\n【ステップ 2】パッケージキャッシュをクリア...")
         run_cmd(['dnf', 'clean', 'all'], use_sudo=True)
         run_cmd(['dnf', 'makecache'], use_sudo=True)
+        print("✓ キャッシュをクリアしました")
         
-        # 3. NVIDIAドライバをインストール
-        print("\n【ステップ 3】NVIDIAドライバをインストール...")
-        
-        driver_package = 'nvidia-driver:latest-dkms'
-        
-        success, _ = run_cmd(['dnf', 'module', 'install', '-y', driver_package], 
-                            use_sudo=True, check=False)
-        
-        if not success:
-            print("モジュールインストール失敗、直接インストールを試行...")
-            success, _ = run_cmd(['dnf', 'install', '-y', 'nvidia-driver', 'nvidia-settings'], 
-                                use_sudo=True, check=False)
-        
-        if success:
-            print("✓ NVIDIAドライバのインストール成功")
-        else:
-            print("✗ NVIDIAドライバのインストール失敗")
-            return False
-        
-        # 4. CUDA Toolkitをインストール
-        print("\n【ステップ 4】CUDA Toolkitをインストール...")
-        
+        print("\n【ステップ 3】CUDA Toolkitをインストール...")
         success, _ = run_cmd(['dnf', 'install', '-y', 'cuda-toolkit'], use_sudo=True, check=False)
-        
-        if not success:
-            print("cuda-toolkit-12-xのインストールを試行...")
-            success, _ = run_cmd(['dnf', 'install', '-y', 'cuda-toolkit-12-*'], 
-                                use_sudo=True, check=False)
         
         if success:
             print("✓ CUDA Toolkitのインストール成功")
+            return True
         else:
             print("✗ CUDA Toolkitのインストール失敗")
             return False
+    
+    def install_nvidia_driver_dnf(self) -> bool:
+        """DNF (RHEL/CentOS): Network RepoからGPU Driverをインストール"""
+        print("\n" + "=" * 70)
+        print("【DNF】NVIDIAドライバをインストール (Network Repo)")
+        print("=" * 70)
         
-        # 5. 完全なシステム更新
-        print("\n【ステップ 5】完全なシステム更新を実行...")
-        run_cmd(['dnf', 'upgrade', '-y'], use_sudo=True)
-        print("✓ システム更新完了 (dnf upgrade)")
+        print("\n【ステップ 1】NVIDIA Network Repositoryを追加...")
         
+        nvidia_repo = "https://developer.download.nvidia.com/compute/cuda/repos/rhel9/x86_64/cuda-rhel9.repo"
+        
+        success, _ = run_cmd(['dnf', 'config-manager', '--add-repo', nvidia_repo], 
+                            use_sudo=True, check=False)
+        if success:
+            print("✓ NVIDIA Repositoryを追加しました")
+        else:
+            print("⚠ Repository追加失敗、手動ダウンロードを試行...")
+            run_cmd(['wget', '-O', '/etc/yum.repos.d/cuda-rhel9.repo', nvidia_repo], 
+                   use_sudo=True, check=False)
+        
+        print("\n【ステップ 2】パッケージキャッシュをクリア...")
+        run_cmd(['dnf', 'clean', 'all'], use_sudo=True)
+        run_cmd(['dnf', 'makecache'], use_sudo=True)
+        print("✓ キャッシュをクリアしました")
+        
+        print("\n【ステップ 3】NVIDIAドライバをインストール...")
+        
+        success, _ = run_cmd(['dnf', 'install', '-y', 'nvidia-driver'], 
+                            use_sudo=True, check=False)
+        
+        if success:
+            print("✓ NVIDIAドライバのインストール成功")
+            return True
+        else:
+            print("✗ NVIDIAドライバのインストール失敗")
+            return False
+    
+    def prepare_gpu_burn(self) -> bool:
+        """GPU Burnソースコードをダウンロード（コンパイルなし）"""
+        print(f"\nGPU Burnリポジトリをダウンロード...")
+        print(f"ソース: {GPU_BURN_REPO}")
+        
+        if os.path.exists(GPU_BURN_PATH):
+            print(f"✓ GPU Burnディレクトリが既に存在: {GPU_BURN_PATH}")
+            return True
+        
+        success, _ = run_cmd(['git', 'clone', GPU_BURN_REPO, GPU_BURN_PATH], check=False)
+        
+        if not success:
+            print("✗ ダウンロード失敗")
+            return False
+        
+        print("✓ ダウンロード成功")
         return True
     
+    def install_gpu_burn(self, cuda_path: str = None) -> bool:
+        """GPU Burnをコンパイル"""
+        print("\n" + "=" * 70)
+        print("GPU Burnをコンパイル")
+        print("=" * 70)
+        
+        if not os.path.exists(GPU_BURN_PATH):
+            print(f"✗ GPU Burnディレクトリが見つかりません: {GPU_BURN_PATH}")
+            return False
+        
+        if os.path.exists(os.path.join(GPU_BURN_PATH, 'gpu_burn')):
+            print("✓ GPU Burnは既にコンパイル済み")
+            return True
+        
+        print(f"\nGPU Burnをコンパイル...")
+        
+        original_dir = os.getcwd()
+        try:
+            os.chdir(GPU_BURN_PATH)
+            
+            # 環境変数を設定
+            if cuda_path:
+                print(f"CUDAパスを使用: {cuda_path}")
+                os.environ['PATH'] = f"{os.path.join(cuda_path, 'bin')}:{os.environ.get('PATH', '')}"
+                os.environ['LD_LIBRARY_PATH'] = f"{os.path.join(cuda_path, 'lib64')}:{os.environ.get('LD_LIBRARY_PATH', '')}"
+            
+            success, output = run_cmd(['make'], check=False)
+            
+            if success and os.path.exists('gpu_burn'):
+                print("✓ GPU Burnコンパイル成功")
+                return True
+            else:
+                print(f"✗ GPU Burnコンパイル失敗")
+                if output:
+                    print(f"エラーメッセージ: {output}")
+                return False
+                
+        finally:
+            os.chdir(original_dir)
+    
+    def verify_gpu_burn(self) -> bool:
+        """GPU-BURN実行確認"""
+        print(f"\nGPU-BURN実行ファイルの確認...")
+        
+        gpu_burn_path = os.path.join(GPU_BURN_PATH, 'gpu_burn')
+        
+        if not os.path.exists(gpu_burn_path):
+            print(f"✗ GPU-BURN実行ファイルが見つかりません: {gpu_burn_path}")
+            return False
+        
+        print(f"✓ GPU-BURN実行ファイルが存在: {gpu_burn_path}")
+        print(f"✓ 実行権限を確認中...")
+        
+        if os.access(gpu_burn_path, os.X_OK):
+            print(f"✓ 実行権限あり")
+        else:
+            print(f"⚠ 実行権限がない、設定中...")
+            os.chmod(gpu_burn_path, 0o755)
+            print(f"✓ 実行権限を設定完了")
+        
+        # 簡単な実行テスト
+        print(f"\n【実行テスト】GPU-BURNの初期化テスト (5秒)...")
+        
+        original_dir = os.getcwd()
+        try:
+            os.chdir(GPU_BURN_PATH)
+            success, output = run_cmd([gpu_burn_path, '5'], check=False, silent=False)
+            
+            if success:
+                print("\n✓ GPU-BURN実行確認成功!")
+                print("\n" + "=" * 70)
+                print("使用方法:")
+                print("=" * 70)
+                print(f"cd {GPU_BURN_PATH}")
+                print("./gpu_burn 60       # 60秒テスト")
+                print("./gpu_burn 3600     # 1時間テスト")
+                print("./gpu_burn -d 60    # 倍精度でテスト")
+                print("./gpu_burn -l       # すべてのGPUをリスト")
+                print("./gpu_burn -i 0     # GPU 0のみテスト")
+                print("=" * 70)
+                return True
+            else:
+                print("\n⚠ GPU-BURN実行テスト失敗")
+                if output:
+                    print(f"エラー: {output}")
+                return False
+                
+        finally:
+            os.chdir(original_dir)
+    
     def create_auto_start(self) -> bool:
-        """Linux 自動起動サービスを作成"""
-        print("\nLinux 自動起動サービスを設定...")
+        """Linux自動起動サービスを作成"""
+        print("\nLinux自動起動を設定...")
         
         work_dir = os.path.dirname(SCRIPT_PATH)
         
@@ -329,7 +523,6 @@ systemctl daemon-reload
                 f.write(script_content)
             os.chmod(AUTO_START_SCRIPT, 0o755)
             print(f"✓ 実行スクリプトを作成: {AUTO_START_SCRIPT}")
-            print(f"  使用: python3")
         except Exception as e:
             print(f"✗ スクリプト作成失敗: {e}")
             return False
@@ -365,8 +558,8 @@ WantedBy=multi-user.target
         return False
     
     def remove_auto_start(self) -> bool:
-        """Linux 自動起動サービスを削除"""
-        print("\nLinux 自動起動サービスを削除...")
+        """Linux自動起動サービスを削除"""
+        print("\nLinux自動起動を削除...")
         
         run_cmd(['systemctl', 'disable', 'cuda-setup.service'], use_sudo=True, check=False)
         run_cmd(['systemctl', 'stop', 'cuda-setup.service'], use_sudo=True, check=False)
@@ -382,77 +575,3 @@ WantedBy=multi-user.target
         except Exception as e:
             print(f"⚠ ファイル削除時にエラー: {e}")
             return False
-    
-    def install_gpu_burn(self, compute_capability: str = None) -> bool:
-        """GPU Burnをダウンロードしてコンパイル"""
-        print("\n" + "=" * 70)
-        print("【GPU ステップ 3】GPU Burn ストレステストツールをインストール")
-        print("=" * 70)
-        
-        if os.path.exists(GPU_BURN_PATH):
-            print(f"✓ GPU Burn ディレクトリが存在: {GPU_BURN_PATH}")
-            if os.path.exists(os.path.join(GPU_BURN_PATH, 'gpu_burn')):
-                print("✓ GPU Burn はコンパイル済み")
-                return True
-            else:
-                print("⚠ 再コンパイルが必要")
-        else:
-            print(f"\nGPU Burn repositoryをクローン...")
-            print(f"ソース: {GPU_BURN_REPO}")
-            success, _ = run_cmd(['git', 'clone', GPU_BURN_REPO, GPU_BURN_PATH], check=False)
-            
-            if not success:
-                print("✗ クローン失敗")
-                return False
-            
-            print("✓ クローン成功")
-        
-        print(f"\nGPU Burnをコンパイル...")
-        
-        if compute_capability:
-            print(f"Compute Capabilityを使用: {compute_capability}")
-            make_cmd = ['make', f'COMPUTE={compute_capability.replace(".", "")}']
-        else:
-            print("デフォルトのCompute Capabilityを使用")
-            make_cmd = ['make']
-        
-        original_dir = os.getcwd()
-        try:
-            os.chdir(GPU_BURN_PATH)
-            
-            cuda_paths = ['/usr/local/cuda', '/usr/local/cuda-12', '/usr/local/cuda-11', '/usr']
-            cuda_path = None
-            for path in cuda_paths:
-                nvcc_path = os.path.join(path, 'bin', 'nvcc') if path != '/usr' else '/usr/bin/nvcc'
-                if os.path.exists(nvcc_path):
-                    cuda_path = path
-                    break
-            
-            if cuda_path:
-                print(f"CUDAパスを使用: {cuda_path}")
-                make_cmd.append(f'CUDAPATH={cuda_path}')
-            
-            success, output = run_cmd(make_cmd, check=False)
-            
-            if success and os.path.exists('gpu_burn'):
-                print("✓ GPU Burn コンパイル成功")
-                print(f"\n実行ファイルの場所: {os.path.join(GPU_BURN_PATH, 'gpu_burn')}")
-                print("\n" + "=" * 70)
-                print("使用方法:")
-                print("=" * 70)
-                print(f"cd {GPU_BURN_PATH}")
-                print("./gpu_burn 60       # 60秒テスト")
-                print("./gpu_burn 3600     # 1時間テスト")
-                print("./gpu_burn -d 60    # 倍精度でテスト")
-                print("./gpu_burn -l       # すべてのGPUをリスト")
-                print("./gpu_burn -i 0     # GPU 0のみテスト")
-                print("=" * 70)
-                return True
-            else:
-                print(f"✗ GPU Burn コンパイル失敗")
-                if output:
-                    print(f"エラーメッセージ: {output}")
-                return False
-                
-        finally:
-            os.chdir(original_dir)
